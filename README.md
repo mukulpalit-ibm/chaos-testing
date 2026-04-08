@@ -1,2 +1,2 @@
 # chaos-testing
-A Chaos Tester
+This project presents a Backend Chaos Testing Middleware designed to simulate real-world failures in API systems. The middleware intercepts incoming requests and injects controlled disruptions such as latency, random failures, and custom error responses. It provides a configurable interface to adjust parameters like delay duration, failure rate, and route-specific rules. By introducing these conditions, developers can test system resilience and identify weaknesses before deployment. Built using lightweight frameworks like Node.js with Express or Python with FastAPI, the solution is easy to integrate and modify dynamically. This approach enhances reliability and supports modern DevOps practices through proactive failure testing.
