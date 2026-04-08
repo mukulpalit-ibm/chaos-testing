@@ -36,7 +36,27 @@ const defaultRouteRule = (path = '/api/example', method: HttpMethod = 'GET'): Ro
   },
 });
 
-const methodOptions: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+const methodOptions: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'ANY'];
+
+// HTTP Error Status Codes with descriptions
+const HTTP_ERROR_CODES = [
+  // 4xx Client Errors
+  { code: 400, label: '400 - Bad Request', description: 'Invalid request syntax' },
+  { code: 401, label: '401 - Unauthorized', description: 'Authentication required' },
+  { code: 403, label: '403 - Forbidden', description: 'Access denied' },
+  { code: 404, label: '404 - Not Found', description: 'Resource not found' },
+  { code: 405, label: '405 - Method Not Allowed', description: 'HTTP method not supported' },
+  { code: 408, label: '408 - Request Timeout', description: 'Request took too long' },
+  { code: 409, label: '409 - Conflict', description: 'Request conflicts with current state' },
+  { code: 410, label: '410 - Gone', description: 'Resource permanently deleted' },
+  { code: 429, label: '429 - Too Many Requests', description: 'Rate limit exceeded' },
+  // 5xx Server Errors
+  { code: 500, label: '500 - Internal Server Error', description: 'Generic server error' },
+  { code: 502, label: '502 - Bad Gateway', description: 'Invalid upstream response' },
+  { code: 503, label: '503 - Service Unavailable', description: 'Server temporarily unavailable' },
+  { code: 504, label: '504 - Gateway Timeout', description: 'Upstream server timeout' },
+  { code: 507, label: '507 - Insufficient Storage', description: 'Server storage full' },
+] as const;
 
 export function ConfigForm({
   config,
@@ -365,26 +385,46 @@ export function ConfigForm({
               />
 
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Status Codes (comma-separated)
+                Error Status Codes
               </label>
-              <input
-                type="text"
-                value={formData.errors.statusCodes.join(', ')}
-                onChange={e =>
-                  updateForm(current => ({
-                    ...current,
-                    errors: {
-                      ...current.errors,
-                      statusCodes: e.target.value
-                        .split(',')
-                        .map(code => parseInt(code.trim(), 10))
-                        .filter(code => !Number.isNaN(code)),
-                    },
-                  }))
-                }
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-                disabled={!formData.errors.enabled}
-              />
+              <div className="space-y-2 max-h-64 overflow-y-auto border border-gray-300 rounded-md p-3 bg-gray-50">
+                {HTTP_ERROR_CODES.map(({ code, label, description }) => (
+                  <label
+                    key={code}
+                    className={`flex items-start p-2 rounded hover:bg-gray-100 cursor-pointer ${
+                      !formData.errors.enabled ? 'opacity-50 cursor-not-allowed' : ''
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={formData.errors.statusCodes.includes(code)}
+                      onChange={e => {
+                        const isChecked = e.target.checked;
+                        updateForm(current => ({
+                          ...current,
+                          errors: {
+                            ...current.errors,
+                            statusCodes: isChecked
+                              ? [...current.errors.statusCodes, code].sort((a, b) => a - b)
+                              : current.errors.statusCodes.filter(c => c !== code),
+                          },
+                        }));
+                      }}
+                      disabled={!formData.errors.enabled}
+                      className="mt-1 mr-3 h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded"
+                    />
+                    <div className="flex-1">
+                      <div className="font-medium text-gray-900">{label}</div>
+                      <div className="text-xs text-gray-600">{description}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-gray-500">
+                Selected: {formData.errors.statusCodes.length > 0
+                  ? formData.errors.statusCodes.join(', ')
+                  : 'None'}
+              </p>
             </div>
           </div>
 
@@ -620,25 +660,45 @@ export function ConfigForm({
                           disabled={!route.errors.enabled}
                         />
 
-                        <input
-                          type="text"
-                          value={route.errors.statusCodes.join(', ')}
-                          onChange={e =>
-                            updateRouteRule(route.id, current => ({
-                              ...current,
-                              errors: {
-                                ...current.errors,
-                                statusCodes: e.target.value
-                                  .split(',')
-                                  .map(code => parseInt(code.trim(), 10))
-                                  .filter(code => !Number.isNaN(code)),
-                              },
-                            }))
-                          }
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                          placeholder="500, 502, 503"
-                          disabled={!route.errors.enabled}
-                        />
+                        <label className="block text-sm text-gray-700 mb-2">Error Status Codes</label>
+                        <div className="space-y-1 max-h-48 overflow-y-auto border border-gray-300 rounded-md p-2 bg-gray-50">
+                          {HTTP_ERROR_CODES.map(({ code, label, description }) => (
+                            <label
+                              key={code}
+                              className={`flex items-start p-2 rounded hover:bg-gray-100 cursor-pointer text-sm ${
+                                !route.errors.enabled ? 'opacity-50 cursor-not-allowed' : ''
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={route.errors.statusCodes.includes(code)}
+                                onChange={e => {
+                                  const isChecked = e.target.checked;
+                                  updateRouteRule(route.id, current => ({
+                                    ...current,
+                                    errors: {
+                                      ...current.errors,
+                                      statusCodes: isChecked
+                                        ? [...current.errors.statusCodes, code].sort((a, b) => a - b)
+                                        : current.errors.statusCodes.filter(c => c !== code),
+                                    },
+                                  }));
+                                }}
+                                disabled={!route.errors.enabled}
+                                className="mt-0.5 mr-2 h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded"
+                              />
+                              <div className="flex-1">
+                                <div className="font-medium text-gray-900">{label}</div>
+                                <div className="text-xs text-gray-600">{description}</div>
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                        <p className="mt-1 text-xs text-gray-500">
+                          Selected: {route.errors.statusCodes.length > 0
+                            ? route.errors.statusCodes.join(', ')
+                            : 'None'}
+                        </p>
                       </div>
                     </div>
                   </div>

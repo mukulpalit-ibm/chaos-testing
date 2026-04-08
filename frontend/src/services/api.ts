@@ -10,10 +10,6 @@ import type {
 } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3999';
-const USE_MOCK_DATA = false;
-const BACKEND_MODE = import.meta.env.VITE_BACKEND_MODE || 'hybrid';
-
-const delay = (ms = 300) => new Promise(resolve => setTimeout(resolve, ms));
 
 const createDefaultRouteRule = (path: string, method: HttpMethod): RouteChaosRule => ({
   id: `${method}-${path}`,
@@ -32,115 +28,6 @@ const createDefaultRouteRule = (path: string, method: HttpMethod): RouteChaosRul
     statusCodes: [500, 502, 503],
   },
 });
-
-const mockDiscoveredRoutes: DiscoveredRoute[] = [
-  {
-    id: 'GET-/mock/users',
-    path: '/mock/users',
-    method: 'GET',
-    requestCount: 428,
-    averageLatency: 122,
-    errorRate: 1.8,
-    lastSeen: Date.now() - 45_000,
-  },
-  {
-    id: 'POST-/mock/orders',
-    path: '/mock/orders',
-    method: 'POST',
-    requestCount: 186,
-    averageLatency: 341,
-    errorRate: 7.6,
-    lastSeen: Date.now() - 15_000,
-  },
-  {
-    id: 'GET-/mock/products',
-    path: '/mock/products',
-    method: 'GET',
-    requestCount: 633,
-    averageLatency: 98,
-    errorRate: 0.6,
-    lastSeen: Date.now() - 10_000,
-  },
-];
-
-let mockConfig: ChaosConfig = {
-  enabled: false,
-  defaultProbability: 0.1,
-  latency: {
-    enabled: true,
-    minDelay: 100,
-    maxDelay: 500,
-    probability: 0.3,
-  },
-  errors: {
-    enabled: true,
-    probability: 0.1,
-    statusCodes: [500, 502, 503],
-  },
-  routes: [
-    {
-      ...createDefaultRouteRule('/mock/orders', 'POST'),
-      enabled: true,
-      latency: {
-        enabled: true,
-        minDelay: 250,
-        maxDelay: 900,
-        probability: 0.35,
-      },
-      errors: {
-        enabled: true,
-        probability: 0.18,
-        statusCodes: [502, 503],
-      },
-    },
-  ],
-  updatedAt: Date.now(),
-  versionName: 'Initial Mock Config',
-};
-
-
-const mockRequests: Request[] = Array.from({ length: 30 }, (_, i) => {
-  const route = mockDiscoveredRoutes[i % mockDiscoveredRoutes.length];
-  const routeRule = mockConfig.routes.find(rule => rule.path === route.path && rule.method === route.method);
-  const chaosTriggered = Math.random() > 0.68;
-  const chaosType = chaosTriggered ? (Math.random() > 0.5 ? 'latency' : 'error') : undefined;
-  const isError = chaosType === 'error';
-
-  return {
-    id: `req-${i + 1}`,
-    timestamp: Date.now() - i * 60_000,
-    method: route.method,
-    route: route.path,
-    status: isError ? [500, 502, 503][Math.floor(Math.random() * 3)] : 200,
-    latency:
-      chaosType === 'latency'
-        ? Math.floor(Math.random() * ((routeRule?.latency.maxDelay || 500) - (routeRule?.latency.minDelay || 100) + 1)) +
-          (routeRule?.latency.minDelay || 100)
-        : Math.floor(Math.random() * 220) + 40,
-    chaosType,
-  };
-});
-
-const getActiveRouteRules = () => mockConfig.routes.filter(route => route.enabled).length;
-
-const buildMetrics = (): Metrics => {
-  const totalRequests = mockRequests.length;
-  const injectedRequests = mockRequests.filter(request => request.chaosType).length;
-  const successRate =
-    totalRequests === 0
-      ? 0
-      : (mockRequests.filter(request => request.status >= 200 && request.status < 300).length / totalRequests) * 100;
-  const averageLatency =
-    totalRequests === 0 ? 0 : mockRequests.reduce((sum, request) => sum + request.latency, 0) / totalRequests;
-
-  return {
-    totalRequests,
-    injectedRequests,
-    successRate,
-    averageLatency,
-    activeRouteRules: getActiveRouteRules(),
-  };
-};
 
 const validateConfig = (config: ChaosConfig): ConfigValidationResult => {
   const errors: string[] = [];
@@ -234,81 +121,80 @@ const applyRequestFilters = (requests: Request[], filters?: Partial<RequestFilte
   });
 };
 
-const shouldUseMockOnly = () => USE_MOCK_DATA || BACKEND_MODE === 'mock';
-
 const toBackendRouteKey = (path: string) => {
   // Use path as-is, no transformation
   return path;
 };
 
-const mapBackendRoutes = async (): Promise<DiscoveredRoute[]> => {
-  const res = await fetch(`${API_BASE}/chaos/routes`);
-  if (!res.ok) throw new Error('Failed to fetch discovered routes');
-
-  const data: Array<{ method: string; path: string }> = await res.json();
-
-  return data.map((route, index) => ({
-    id: `${route.method}-${route.path}-${index}`,
-    path: route.path, // Use backend path as-is, no /api prefix
-    method: route.method === 'ANY' ? 'GET' : (route.method as HttpMethod),
-    requestCount: 0,
-    averageLatency: 0,
-    errorRate: 0,
-    lastSeen: Date.now(),
-  }));
-};
-
-const mapBackendConfig = async (): Promise<ChaosConfig> => {
-  const res = await fetch(`${API_BASE}/chaos/config`);
-  if (!res.ok) throw new Error('Failed to fetch config');
-
-  const backendConfig: Record<
-    string,
-    {
-      enabled: boolean;
-      failureRate: number;
-      delayRate: number;
-      minDelayMs: number;
-      maxDelayMs: number;
-      errorCodes: number[];
+const mapBackendConfig = (backendConfig: Record<
+  string,
+  {
+    enabled: boolean;
+    failureRate: number;
+    delayRate: number;
+    minDelayMs: number;
+    maxDelayMs: number;
+    errorCodes: number[] | null;
+    targetHeader?: string;
+    targetValue?: string;
+    corruptionRate?: number;
+  }
+>): ChaosConfig => {
+  const routes = Object.entries(backendConfig || {}).map(([path, route]) => {
+    const routeRule: RouteChaosRule = {
+      id: `ANY-${path}`,
+      path: path,
+      method: 'ANY' as HttpMethod,
+      enabled: route.enabled,
+      latency: {
+        enabled: route.delayRate > 0,
+        minDelay: route.minDelayMs,
+        maxDelay: route.maxDelayMs,
+        probability: route.delayRate,
+      },
+      errors: {
+        enabled: route.failureRate > 0,
+        probability: route.failureRate,
+        statusCodes: route.errorCodes && route.errorCodes.length > 0 ? route.errorCodes : [500],
+      },
+    };
+    
+    // Include optional backend fields if present
+    if (route.targetHeader) {
+      routeRule.targetHeader = route.targetHeader;
     }
-  > = await res.json();
-
-  const routes = Object.entries(backendConfig).map(([path, route]) => ({
-    id: `ANY-${path}`,
-    path: path, // Use backend path as-is, no /api prefix
-    method: 'GET' as HttpMethod,
-    enabled: route.enabled,
-    latency: {
-      enabled: route.delayRate > 0,
-      minDelay: route.minDelayMs,
-      maxDelay: route.maxDelayMs,
-      probability: route.delayRate,
-    },
-    errors: {
-      enabled: route.failureRate > 0,
-      probability: route.failureRate,
-      statusCodes: route.errorCodes?.length ? route.errorCodes : [500],
-    },
-  }));
+    if (route.targetValue) {
+      routeRule.targetValue = route.targetValue;
+    }
+    if (route.corruptionRate !== undefined && route.corruptionRate > 0) {
+      routeRule.corruptionRate = route.corruptionRate;
+    }
+    
+    return routeRule;
+  });
 
   return {
-    ...structuredClone(mockConfig),
+    enabled: false,
+    defaultProbability: 0.1,
+    latency: {
+      enabled: true,
+      minDelay: 100,
+      maxDelay: 500,
+      probability: 0.3,
+    },
+    errors: {
+      enabled: true,
+      probability: 0.1,
+      statusCodes: [500, 502, 503],
+    },
     routes,
-    updatedAt: Date.now(),
-  };
-};
-
-const persistMockConfigVersion = (config: ChaosConfig) => {
-  mockConfig = {
-    ...structuredClone(config),
     updatedAt: Date.now(),
   };
 };
 
 const updateBackendConfig = async (config: ChaosConfig): Promise<void> => {
   const payload = config.routes.reduce<Record<string, unknown>>((acc, route) => {
-    acc[toBackendRouteKey(route.path)] = {
+    const backendRoute: Record<string, unknown> = {
       enabled: route.enabled,
       failureRate: route.errors.enabled ? route.errors.probability : 0,
       delayRate: route.latency.enabled ? route.latency.probability : 0,
@@ -316,6 +202,19 @@ const updateBackendConfig = async (config: ChaosConfig): Promise<void> => {
       maxDelayMs: route.latency.maxDelay,
       errorCodes: route.errors.statusCodes,
     };
+    
+    // Include optional backend fields if they exist
+    if (route.targetHeader !== undefined) {
+      backendRoute.targetHeader = route.targetHeader;
+    }
+    if (route.targetValue !== undefined) {
+      backendRoute.targetValue = route.targetValue;
+    }
+    if (route.corruptionRate !== undefined) {
+      backendRoute.corruptionRate = route.corruptionRate;
+    }
+    
+    acc[toBackendRouteKey(route.path)] = backendRoute;
     return acc;
   }, {});
 
@@ -330,27 +229,16 @@ const updateBackendConfig = async (config: ChaosConfig): Promise<void> => {
 
 export const api = {
   getMetrics: async (): Promise<Metrics> => {
-    await delay(120);
-    return buildMetrics();
+    const res = await fetch(`${API_BASE}/chaos/metrics`);
+    if (!res.ok) throw new Error('Failed to fetch metrics');
+    return res.json();
   },
 
   getConfig: async (): Promise<ChaosConfig> => {
-    if (shouldUseMockOnly()) {
-      await delay();
-      return structuredClone(mockConfig);
-    }
-
-    try {
-      const backendConfig = await mapBackendConfig();
-      mockConfig = {
-        ...structuredClone(mockConfig),
-        routes: backendConfig.routes,
-        updatedAt: Date.now(),
-      };
-      return structuredClone(mockConfig);
-    } catch {
-      return structuredClone(mockConfig);
-    }
+    const res = await fetch(`${API_BASE}/chaos/config`);
+    if (!res.ok) throw new Error('Failed to fetch config');
+    const backendConfig = await res.json();
+    return mapBackendConfig(backendConfig);
   },
 
   updateConfig: async (config: ChaosConfig): Promise<void> => {
@@ -360,68 +248,34 @@ export const api = {
       throw new Error(validation.errors.join(' '));
     }
 
-    persistMockConfigVersion(config);
-
-    if (shouldUseMockOnly()) {
-      await delay();
-      return;
-    }
-
-    try {
-      await updateBackendConfig(config);
-    } catch {
-      // Keep frontend state functional even when backend only partially supports the contract.
-    }
+    await updateBackendConfig(config);
   },
 
   validateConfig: async (config: ChaosConfig): Promise<ConfigValidationResult> => {
-    await delay(100);
     return validateConfig(config);
   },
 
   getRequests: async (limit = 50, filters?: Partial<RequestFilters>): Promise<Request[]> => {
-    await delay(120);
-    return applyRequestFilters(mockRequests, filters).slice(0, limit);
+    const res = await fetch(`${API_BASE}/chaos/requests`);
+    if (!res.ok) throw new Error('Failed to fetch requests');
+    const requests = await res.json();
+    return applyRequestFilters(requests, filters).slice(0, limit);
   },
 
   getDiscoveredRoutes: async (): Promise<DiscoveredRoute[]> => {
-    if (shouldUseMockOnly()) {
-      await delay();
-      return structuredClone(mockDiscoveredRoutes);
-    }
-
-    try {
-      const backendRoutes = await mapBackendRoutes();
-      const merged = [...structuredClone(mockDiscoveredRoutes)];
-
-      backendRoutes.forEach(route => {
-        if (!merged.some(existing => existing.path === route.path)) {
-          merged.push(route);
-        }
-      });
-
-      return merged;
-    } catch {
-      return structuredClone(mockDiscoveredRoutes);
-    }
+    const res = await fetch(`${API_BASE}/chaos/routes`);
+    if (!res.ok) throw new Error('Failed to fetch routes');
+    return res.json();
   },
 
 
   setChaosEnabled: async (enabled: boolean): Promise<void> => {
-    await delay(100);
-    mockConfig.enabled = enabled;
-    mockConfig.updatedAt = Date.now();
+    // This would need backend support - for now just a placeholder
+    console.log('Set chaos enabled:', enabled);
   },
 
   createRouteRuleFromDiscovery: async (path: string, method: HttpMethod): Promise<RouteChaosRule> => {
-    await delay(100);
-    const existingRule = mockConfig.routes.find(route => route.path === path && route.method === method);
-    if (existingRule) return structuredClone(existingRule);
-
-    const newRule = createDefaultRouteRule(path, method);
-    mockConfig.routes = [...mockConfig.routes, newRule];
-    mockConfig.updatedAt = Date.now();
-    return structuredClone(newRule);
+    return createDefaultRouteRule(path, method);
   },
 };
 

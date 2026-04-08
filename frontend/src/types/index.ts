@@ -1,5 +1,5 @@
-export type ChaosType = 'latency' | 'error';
-export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+export type ChaosType = 'latency' | 'error' | 'corruption';
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'ANY';
 
 export interface LatencyRule {
   enabled: boolean;
@@ -21,6 +21,10 @@ export interface RouteChaosRule {
   enabled: boolean;
   latency: LatencyRule;
   errors: ErrorRule;
+  // Optional backend-specific fields
+  targetHeader?: string;
+  targetValue?: string;
+  corruptionRate?: number;
 }
 
 export interface ChaosConfig {
@@ -43,11 +47,13 @@ export interface Metrics {
 
 export interface Request {
   id: string;
+  /** Timestamp in milliseconds since Unix epoch */
   timestamp: number;
   route: string;
   method: HttpMethod;
   status: number;
   chaosType?: ChaosType;
+  /** Latency in milliseconds */
   latency: number;
 }
 
@@ -56,8 +62,11 @@ export interface DiscoveredRoute {
   path: string;
   method: HttpMethod;
   requestCount: number;
+  /** Average latency in milliseconds */
   averageLatency: number;
+  /** Error rate as percentage (0-100) */
   errorRate: number;
+  /** Timestamp in milliseconds since Unix epoch */
   lastSeen: number;
 }
 

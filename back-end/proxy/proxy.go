@@ -377,6 +377,7 @@ func handleRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 
 		routes = append(routes, map[string]interface{}{
+			"id":             fmt.Sprintf("ANY-%s", route),
 			"method":         "ANY",
 			"path":           route,
 			"requestCount":   metrics.RequestCount,
