@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"chaos-testing/back-end/proxy/llm"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -69,7 +70,7 @@ var state = &ChaosState{
 	RouteMetrics: make(map[string]*RouteMetrics),
 	RequestLogs:  make([]RequestLog, 0, 100),
 	// Hardcode internal proxy paths and backend health checks to never fail
-	ExcludedPaths: []string{"/health", "/chaos/config", "/chaos/routes", "/chaos/metrics", "/chaos/requests"},
+	ExcludedPaths: []string{"/health", "/chaos/config", "/chaos/routes", "/chaos/metrics", "/chaos/requests", "/chaos/analyze"},
 }
 
 // normalizeRoute simplifies paths (e.g., /users/123 -> /users/:id) to prevent state bloat
@@ -493,6 +494,7 @@ func main() {
 	mux.HandleFunc("/chaos/config", corsMiddleware(handleConfig))
 	mux.HandleFunc("/chaos/metrics", corsMiddleware(handleMetrics))
 	mux.HandleFunc("/chaos/requests", corsMiddleware(handleRequests))
+	mux.HandleFunc("/chaos/analyze", corsMiddleware(handleAnalysis))
 
 	// Catch-all route for proxying (Wrapped in Chaos Middleware)
 	mux.Handle("/", chaosMiddleware(proxy))
@@ -502,7 +504,120 @@ func main() {
 	log.Println("📝 Requests endpoint: http://localhost:3999/chaos/requests")
 	log.Println("🛣️  Routes endpoint: http://localhost:3999/chaos/routes")
 	log.Println("⚙️  Config endpoint: http://localhost:3999/chaos/config")
+	log.Println("🤖 AI Analysis endpoint: POST http://localhost:3999/chaos/analyze")
 	if err := http.ListenAndServe(":3999", mux); err != nil {
 		log.Fatalf("Proxy failed to start: %v", err)
 	}
+}
+
+func handleAnalysis(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed. Use POST to trigger analysis.", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get model from query param (default: phi3)
+	model := r.URL.Query().Get("model")
+	if model == "" {
+		model = "llama3"
+	}
+
+	// Aggregate data from state
+	state.mu.RLock()
+
+	// Calculate success rate
+	successRate := 0.0
+	if state.TotalRequests > 0 {
+		successRate = float64(state.SuccessRequests) / float64(state.TotalRequests) * 100
+	}
+
+	// Calculate average latency
+	avgLatency := 0.0
+	if state.TotalRequests > 0 {
+		avgLatency = float64(state.TotalLatency) / float64(state.TotalRequests)
+	}
+
+	// Count active rules
+	activeRules := 0
+	for _, config := range state.Configs {
+		if config.Enabled {
+			activeRules++
+		}
+	}
+
+	// Build metrics snapshot
+	metrics := llm.MetricsSnapshot{
+		TotalRequests:    state.TotalRequests,
+		ChaosRequests:    state.ChaosRequests,
+		SuccessRate:      successRate,
+		AverageLatency:   avgLatency,
+		ActiveRouteRules: activeRules,
+	}
+
+	// Build route statistics
+	var routeStats []llm.RouteStatistics
+	for route, rm := range state.RouteMetrics {
+		config := state.Configs[route]
+
+		routeAvgLatency := 0.0
+		if rm.RequestCount > 0 {
+			routeAvgLatency = float64(rm.TotalLatency) / float64(rm.RequestCount)
+		}
+
+		routeErrorRate := 0.0
+		if rm.RequestCount > 0 {
+			routeErrorRate = float64(rm.ErrorCount) / float64(rm.RequestCount) * 100
+		}
+
+		routeStats = append(routeStats, llm.RouteStatistics{
+			Path:           route,
+			RequestCount:   rm.RequestCount,
+			AverageLatency: routeAvgLatency,
+			ErrorRate:      routeErrorRate,
+			ChaosEnabled:   config != nil && config.Enabled,
+		})
+	}
+
+	// Convert RequestLog to llm.RequestLog
+	var recentLogs []llm.RequestLog
+	for _, rl := range state.RequestLogs {
+		recentLogs = append(recentLogs, llm.RequestLog{
+			ID:        rl.ID,
+			Timestamp: rl.Timestamp,
+			Route:     rl.Route,
+			Method:    rl.Method,
+			Status:    rl.Status,
+			Latency:   rl.Latency,
+			ChaosType: rl.ChaosType,
+		})
+	}
+
+	state.mu.RUnlock()
+
+	// Create analysis request
+	analysisReq := llm.AnalysisRequest{
+		Metrics:    metrics,
+		RecentLogs: recentLogs,
+		RouteStats: routeStats,
+		TimeRange: llm.TimeRange{
+			Start: time.Now().Add(-1 * time.Hour),
+			End:   time.Now(),
+		},
+		AnalysisType: "full",
+	}
+
+	// Perform analysis
+	log.Printf("🤖 Starting AI analysis with model: %s", model)
+	analyzer := llm.NewAnalyzer(model)
+	result, err := analyzer.AnalyzeMetrics(analysisReq)
+	if err != nil {
+		log.Printf("❌ Analysis failed: %v", err)
+		http.Error(w, fmt.Sprintf("Analysis failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("✅ Analysis complete in %dms - Health Score: %.0f", result.ProcessingTimeMs, result.HealthScore)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }

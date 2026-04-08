@@ -1,0 +1,21 @@
+{
+  "summary": "No chaos testing was performed, indicating a lack of stress testing for the system's resilience.",
+  "patterns": [],
+  "recommendations": [
+    {
+      "title": "Enable Chaos Testing",
+      "description": "To improve system resilience, enable chaos testing to simulate failure scenarios and identify potential issues.",
+      "priority": "high",
+      "actionItems": [
+        "Review documentation for chaos testing setup",
+        "Configure and run initial tests"
+      ],
+      "impact": "Enhanced system resilience and improved incident response"
+    }
+  ],
+  "anomalies": [],
+  "healthScore": 100,
+  "generatedAt": "2026-04-08T15:28:44.322772+05:30",
+  "model": "llama3",
+  "processingTimeMs": 2821
+}
