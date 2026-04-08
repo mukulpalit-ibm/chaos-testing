@@ -271,8 +271,8 @@ func main() {
 	mux := http.NewServeMux()
 
 	// Control API Routes (Wrapped in CORS)
-	mux.HandleFunc("/api/chaos/routes", corsMiddleware(handleRoutes))
-	mux.HandleFunc("/api/chaos/config", corsMiddleware(handleConfig))
+	mux.HandleFunc("/chaos/routes", corsMiddleware(handleRoutes))
+	mux.HandleFunc("/chaos/config", corsMiddleware(handleConfig))
 
 	// Catch-all route for proxying (Wrapped in Chaos Middleware)
 	mux.Handle("/", chaosMiddleware(proxy))
