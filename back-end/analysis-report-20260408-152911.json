@@ -1,0 +1,45 @@
+{
+  "summary": "Chaos testing reveals a high error rate and latency increase for the `/products` route, indicating potential issues with distributed system resilience.",
+  "patterns": [
+    {
+      "type": "error_spike",
+      "description": "Error spike observed on `/products` (GET) route during chaos testing",
+      "severity": "high",
+      "affectedRoutes": [
+        "_/products"
+      ]
+    }
+  ],
+  "recommendations": [
+    {
+      "title": "Investigate and remediate error causes",
+      "description": "Review logs and performance metrics to identify root causes of errors on `/products` route. Implement fixes and re-run chaos testing to validate improvements.",
+      "priority": "high",
+      "actionItems": [
+        "Analyze logs",
+        "Implement fixes"
+      ],
+      "impact": "Expected: Improved system resilience"
+    }
+  ],
+  "anomalies": [
+    {
+      "metric": "Total Requests",
+      "expected": 0,
+      "actual": 60,
+      "deviation": 0,
+      "description": "High request volume may indicate scaling or performance issues. Monitor and adjust resources as needed."
+    },
+    {
+      "metric": "Error Rate (/products)",
+      "expected": 0,
+      "actual": 17.5,
+      "deviation": 17.5,
+      "description": "High error rate on `/products` route may indicate distributed system resilience issues. Investigate and remediate."
+    }
+  ],
+  "healthScore": 65,
+  "generatedAt": "2026-04-08T15:29:11.377304+05:30",
+  "model": "llama3",
+  "processingTimeMs": 5023
+}
