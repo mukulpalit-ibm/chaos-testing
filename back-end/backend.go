@@ -18,12 +18,12 @@ func main() {
 	mux := http.NewServeMux()
 
 	// 1. GET /health
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		sendJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "mock-backend"})
 	})
 
 	// 2. GET /products
-	mux.HandleFunc("/products", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/products", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -36,7 +36,7 @@ func main() {
 	})
 
 	// 3. POST /orders
-	mux.HandleFunc("/orders", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/orders", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -50,7 +50,7 @@ func main() {
 
 	// 4. GET /users/:id
 	// (Using standard mux, so we handle the wildcard manually)
-	mux.HandleFunc("/users/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/users/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return

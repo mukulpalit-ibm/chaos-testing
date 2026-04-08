@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"log"
 	"math/rand"
@@ -15,12 +16,15 @@ import (
 // --- State Management ---
 
 type RouteConfig struct {
-	Enabled     bool    `json:"enabled"`
-	FailureRate float64 `json:"failureRate"` // 0.0 to 1.0
-	DelayRate   float64 `json:"delayRate"`   // 0.0 to 1.0
-	MinDelayMs  int     `json:"minDelayMs"`
-	MaxDelayMs  int     `json:"maxDelayMs"`
-	ErrorCodes  []int   `json:"errorCodes"` // e.g., [403, 404, 500, 502, 503]
+	Enabled        bool    `json:"enabled"`
+	FailureRate    float64 `json:"failureRate"`
+	DelayRate      float64 `json:"delayRate"`
+	MinDelayMs     int     `json:"minDelayMs"`
+	MaxDelayMs     int     `json:"maxDelayMs"`
+	ErrorCodes     []int   `json:"errorCodes"`
+	TargetHeader   string  `json:"targetHeader"`   // e.g., "X-User-Tier"
+	TargetValue    string  `json:"targetValue"`    // e.g., "free"
+	CorruptionRate float64 `json:"corruptionRate"` // 0.0 to 1.0
 }
 
 type ChaosState struct {
@@ -45,16 +49,69 @@ func normalizeRoute(path string) string {
 	return path
 }
 
-// --- Middleware & Chaos Logic ---
+// responseInterceptor catches the backend response so we can modify it
+type responseInterceptor struct {
+	http.ResponseWriter
+	body       *bytes.Buffer
+	statusCode int
+}
+
+func (w *responseInterceptor) WriteHeader(statusCode int) {
+	w.statusCode = statusCode
+}
+
+func (w *responseInterceptor) Write(b []byte) (int, error) {
+	return w.body.Write(b)
+}
+
+// corruptJSON recursively traverses JSON and randomly breaks values
+func corruptJSON(body []byte) []byte {
+	var data interface{}
+	if err := json.Unmarshal(body, &data); err != nil {
+		return body // If it's not valid JSON, leave it alone
+	}
+
+	var corrupt func(val interface{}) interface{}
+	corrupt = func(val interface{}) interface{} {
+		switch v := val.(type) {
+		case string:
+			return v + "-CORRUPTED"
+		case float64:
+			return v * -1 // Make prices/IDs negative!
+		case bool:
+			return !v // Flip true to false
+		case map[string]interface{}:
+			for k, child := range v {
+				// 40% chance to corrupt any specific field in an object
+				if rand.Float64() < 0.4 {
+					v[k] = corrupt(child)
+				}
+			}
+			return v
+		case []interface{}:
+			for i, child := range v {
+				if rand.Float64() < 0.4 {
+					v[i] = corrupt(child)
+				}
+			}
+			return v
+		default:
+			return v
+		}
+	}
+
+	corruptedData := corrupt(data)
+	newBody, _ := json.Marshal(corruptedData)
+	return newBody
+}
 
 func chaosMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// --- ADD THESE 3 LINES FOR REACT TO WORK ---
+		// [KEEP YOUR CORS HEADERS HERE]
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Chaos-Target") // Added custom header to allowed list
 
-		// Handle preflight OPTIONS requests immediately
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -62,8 +119,8 @@ func chaosMiddleware(next http.Handler) http.Handler {
 
 		route := normalizeRoute(r.URL.Path)
 
+		// [KEEP YOUR EXCLUSION & DISCOVERY LOGIC HERE]
 		state.mu.Lock()
-		// 1. Check if path is excluded
 		isExcluded := false
 		for _, excludedPath := range state.ExcludedPaths {
 			if strings.HasPrefix(r.URL.Path, excludedPath) {
@@ -72,66 +129,81 @@ func chaosMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		// Register route if not excluded
 		if !isExcluded {
 			state.Discovered[route] = true
 			if _, exists := state.Configs[route]; !exists {
-				// Default safe config
-				state.Configs[route] = &RouteConfig{
-					Enabled:     false,
-					FailureRate: 0.0,
-					DelayRate:   0.0,
-					MinDelayMs:  0,
-					MaxDelayMs:  0,
-					ErrorCodes:  []int{500},
-				}
+				state.Configs[route] = &RouteConfig{Enabled: false}
 			}
 		}
 
-		// Grab a copy of the config so we can unlock quickly
 		var config *RouteConfig
 		if state.Configs[route] != nil {
-			// Shallow copy to prevent race conditions during chaos execution
 			confCopy := *state.Configs[route]
 			config = &confCopy
 		}
 		state.mu.Unlock()
 
-		// 2. Bypass chaos if excluded or disabled
+		// Bypass chaos if disabled or excluded
 		if isExcluded || config == nil || !config.Enabled {
-			log.Printf("➡️ PROXIED: %s %s", r.Method, r.URL.Path)
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// 3. Apply Delay Chaos
+		// --- NEW: BLAST RADIUS CHECK ---
+		if config.TargetHeader != "" {
+			if r.Header.Get(config.TargetHeader) != config.TargetValue {
+				log.Printf("🛡️ CHAOS BYPASSED: Header mismatch for %s", route)
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		// --- DELAY & FAILURE LOGIC (Unchanged) ---
 		if config.DelayRate > 0 && rand.Float64() < config.DelayRate {
 			delay := config.MinDelayMs
 			if config.MaxDelayMs > config.MinDelayMs {
 				delay += rand.Intn(config.MaxDelayMs - config.MinDelayMs)
 			}
 			if delay > 0 {
-				log.Printf("⏳ CHAOS DELAY: %s %s sleeping for %dms", r.Method, route, delay)
+				log.Printf("⏳ CHAOS DELAY: %s sleeping for %dms", route, delay)
 				time.Sleep(time.Duration(delay) * time.Millisecond)
 			}
 		}
 
-		// 4. Apply Failure Chaos
 		if config.FailureRate > 0 && rand.Float64() < config.FailureRate {
-			// Pick a random error code from the allowed list
-			errorCode := http.StatusInternalServerError
+			errorCode := 500
 			if len(config.ErrorCodes) > 0 {
 				errorCode = config.ErrorCodes[rand.Intn(len(config.ErrorCodes))]
 			}
-
-			log.Printf("💥 CHAOS HIT: %s %s -> %d", r.Method, route, errorCode)
+			log.Printf("💥 CHAOS HIT: %s -> %d", route, errorCode)
 			http.Error(w, "Chaos Injected: "+http.StatusText(errorCode), errorCode)
-			return // Stop processing, do not forward to backend
+			return
 		}
 
-		// 5. Forward to Backend (if it survived)
-		log.Printf("⚠️ CHAOS SURVIVED: %s %s", r.Method, route)
-		next.ServeHTTP(w, r)
+		// --- NEW: PAYLOAD TAMPERING ---
+		// We survived the hard failures! Now we intercept the response to corrupt it.
+		interceptor := &responseInterceptor{
+			ResponseWriter: w,
+			body:           &bytes.Buffer{},
+			statusCode:     200, // Default assume OK
+		}
+
+		// Forward to backend, but write into our interceptor instead of directly to client
+		next.ServeHTTP(interceptor, r)
+
+		finalBody := interceptor.body.Bytes()
+
+		// Apply Corruption if it's a successful JSON response
+		if interceptor.statusCode >= 200 && interceptor.statusCode < 300 {
+			if config.CorruptionRate > 0 && rand.Float64() < config.CorruptionRate {
+				log.Printf("🦠 PAYLOAD CORRUPTED: %s", route)
+				finalBody = corruptJSON(finalBody)
+			}
+		}
+
+		// Write the final headers and body back to the real client
+		w.WriteHeader(interceptor.statusCode)
+		w.Write(finalBody)
 	})
 }
 
@@ -199,8 +271,8 @@ func main() {
 	mux := http.NewServeMux()
 
 	// Control API Routes (Wrapped in CORS)
-	mux.HandleFunc("/chaos/routes", corsMiddleware(handleRoutes))
-	mux.HandleFunc("/chaos/config", corsMiddleware(handleConfig))
+	mux.HandleFunc("/api/chaos/routes", corsMiddleware(handleRoutes))
+	mux.HandleFunc("/api/chaos/config", corsMiddleware(handleConfig))
 
 	// Catch-all route for proxying (Wrapped in Chaos Middleware)
 	mux.Handle("/", chaosMiddleware(proxy))
