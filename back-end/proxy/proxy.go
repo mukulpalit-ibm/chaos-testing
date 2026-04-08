@@ -359,8 +359,8 @@ func handleRoutes(w http.ResponseWriter, r *http.Request) {
 	state.mu.RLock()
 	defer state.mu.RUnlock()
 
-	// Enhanced format with statistics
-	var routes []map[string]interface{}
+	// Enhanced format with statistics — initialise to empty slice so JSON encodes [] not null
+	routes := make([]map[string]interface{}, 0, len(state.Discovered))
 	for route := range state.Discovered {
 		metrics := state.RouteMetrics[route]
 		if metrics == nil {

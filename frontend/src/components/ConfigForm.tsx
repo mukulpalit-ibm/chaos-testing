@@ -105,10 +105,7 @@ export function ConfigForm({
       return;
     }
 
-    const success = await onSave({
-      ...formData,
-      versionName: formData.versionName?.trim() || `Config ${new Date().toLocaleTimeString()}`,
-    });
+    const success = await onSave(formData);
 
     if (success) {
       setMessage({ type: 'success', text: 'Configuration saved successfully.' });
@@ -161,15 +158,7 @@ export function ConfigForm({
           </div>
 
           <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
-            <div>
-              <span className="font-semibold">Unsaved changes:</span> {isDirty ? 'Yes' : 'No'}
-            </div>
-            {formData.updatedAt && (
-              <div>
-                <span className="font-semibold">Last updated:</span>{' '}
-                {new Date(formData.updatedAt).toLocaleString()}
-              </div>
-            )}
+            <span className="font-semibold">Unsaved changes:</span> {isDirty ? 'Yes' : 'No'}
           </div>
         </div>
 
@@ -224,208 +213,6 @@ export function ConfigForm({
             >
               Re-run Validation
             </button>
-          </div>
-
-          <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Global Settings</h3>
-
-            <div className="mb-4">
-              <label className="flex items-center">
-                <input
-                  type="checkbox"
-                  checked={formData.enabled}
-                  onChange={e => updateForm(current => ({ ...current, enabled: e.target.checked }))}
-                  className="mr-2 h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded"
-                />
-                <span className="text-sm font-medium text-gray-700">Enable Chaos Testing</span>
-              </label>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Version Name
-                </label>
-                <input
-                  type="text"
-                  value={formData.versionName || ''}
-                  onChange={e => updateForm(current => ({ ...current, versionName: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-                  placeholder="e.g. Orders latency experiment"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Default Chaos Probability: {Math.round(formData.defaultProbability * 100)}%
-                </label>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={formData.defaultProbability * 100}
-                  onChange={e =>
-                    updateForm(current => ({
-                      ...current,
-                      defaultProbability: parseInt(e.target.value, 10) / 100,
-                    }))
-                  }
-                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="grid gap-6 lg:grid-cols-2">
-            <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Global Latency Injection</h3>
-
-              <label className="flex items-center mb-4">
-                <input
-                  type="checkbox"
-                  checked={formData.latency.enabled}
-                  onChange={e =>
-                    updateForm(current => ({
-                      ...current,
-                      latency: { ...current.latency, enabled: e.target.checked },
-                    }))
-                  }
-                  className="mr-2 h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded"
-                />
-                <span className="text-sm font-medium text-gray-700">Enable Latency Injection</span>
-              </label>
-
-              <div className="grid grid-cols-2 gap-4 mb-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Min Delay (ms)</label>
-                  <input
-                    type="number"
-                    value={formData.latency.minDelay}
-                    onChange={e =>
-                      updateForm(current => ({
-                        ...current,
-                        latency: { ...current.latency, minDelay: parseInt(e.target.value, 10) || 0 },
-                      }))
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-                    disabled={!formData.latency.enabled}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Max Delay (ms)</label>
-                  <input
-                    type="number"
-                    value={formData.latency.maxDelay}
-                    onChange={e =>
-                      updateForm(current => ({
-                        ...current,
-                        latency: { ...current.latency, maxDelay: parseInt(e.target.value, 10) || 0 },
-                      }))
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-                    disabled={!formData.latency.enabled}
-                  />
-                </div>
-              </div>
-
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Probability: {Math.round(formData.latency.probability * 100)}%
-              </label>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={formData.latency.probability * 100}
-                onChange={e =>
-                  updateForm(current => ({
-                    ...current,
-                    latency: { ...current.latency, probability: parseInt(e.target.value, 10) / 100 },
-                  }))
-                }
-                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                disabled={!formData.latency.enabled}
-              />
-            </div>
-
-            <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Global Error Injection</h3>
-
-              <label className="flex items-center mb-4">
-                <input
-                  type="checkbox"
-                  checked={formData.errors.enabled}
-                  onChange={e =>
-                    updateForm(current => ({
-                      ...current,
-                      errors: { ...current.errors, enabled: e.target.checked },
-                    }))
-                  }
-                  className="mr-2 h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded"
-                />
-                <span className="text-sm font-medium text-gray-700">Enable Error Injection</span>
-              </label>
-
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Probability: {Math.round(formData.errors.probability * 100)}%
-              </label>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={formData.errors.probability * 100}
-                onChange={e =>
-                  updateForm(current => ({
-                    ...current,
-                    errors: { ...current.errors, probability: parseInt(e.target.value, 10) / 100 },
-                  }))
-                }
-                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer mb-4"
-                disabled={!formData.errors.enabled}
-              />
-
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Error Status Codes
-              </label>
-              <div className="space-y-2 max-h-64 overflow-y-auto border border-gray-300 rounded-md p-3 bg-gray-50">
-                {HTTP_ERROR_CODES.map(({ code, label, description }) => (
-                  <label
-                    key={code}
-                    className={`flex items-start p-2 rounded hover:bg-gray-100 cursor-pointer ${
-                      !formData.errors.enabled ? 'opacity-50 cursor-not-allowed' : ''
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={formData.errors.statusCodes.includes(code)}
-                      onChange={e => {
-                        const isChecked = e.target.checked;
-                        updateForm(current => ({
-                          ...current,
-                          errors: {
-                            ...current.errors,
-                            statusCodes: isChecked
-                              ? [...current.errors.statusCodes, code].sort((a, b) => a - b)
-                              : current.errors.statusCodes.filter(c => c !== code),
-                          },
-                        }));
-                      }}
-                      disabled={!formData.errors.enabled}
-                      className="mt-1 mr-3 h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded"
-                    />
-                    <div className="flex-1">
-                      <div className="font-medium text-gray-900">{label}</div>
-                      <div className="text-xs text-gray-600">{description}</div>
-                    </div>
-                  </label>
-                ))}
-              </div>
-              <p className="mt-2 text-xs text-gray-500">
-                Selected: {formData.errors.statusCodes.length > 0
-                  ? formData.errors.statusCodes.join(', ')
-                  : 'None'}
-              </p>
-            </div>
           </div>
 
           <div className="bg-white rounded-lg shadow p-6">
@@ -547,6 +334,71 @@ export function ConfigForm({
                       >
                         Remove
                       </button>
+                    </div>
+
+                    {/* Blast Radius & Corruption controls — mirror RouteConfig.TargetHeader/TargetValue/CorruptionRate */}
+                    <div className="mt-4 rounded-md border border-purple-200 bg-purple-50 p-4">
+                      <h4 className="font-semibold text-purple-900 mb-3">Blast Radius &amp; Corruption</h4>
+                      <div className="grid gap-4 md:grid-cols-3">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Target Header
+                          </label>
+                          <input
+                            type="text"
+                            value={route.targetHeader ?? ''}
+                            onChange={e =>
+                              updateRouteRule(route.id, current => ({
+                                ...current,
+                                targetHeader: e.target.value || undefined,
+                              }))
+                            }
+                            placeholder="e.g. X-User-Tier"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Target Value
+                          </label>
+                          <input
+                            type="text"
+                            value={route.targetValue ?? ''}
+                            onChange={e =>
+                              updateRouteRule(route.id, current => ({
+                                ...current,
+                                targetValue: e.target.value || undefined,
+                              }))
+                            }
+                            placeholder="e.g. free"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Payload Corruption: {Math.round((route.corruptionRate ?? 0) * 100)}%
+                          </label>
+                          <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            value={(route.corruptionRate ?? 0) * 100}
+                            onChange={e =>
+                              updateRouteRule(route.id, current => ({
+                                ...current,
+                                corruptionRate: parseInt(e.target.value, 10) / 100 || undefined,
+                              }))
+                            }
+                            className="w-full h-2 bg-purple-200 rounded-lg appearance-none cursor-pointer"
+                          />
+                          <p className="mt-1 text-xs text-purple-700">
+                            Randomly corrupts JSON fields in successful responses.
+                          </p>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-xs text-purple-700">
+                        Leave Target Header blank to apply chaos to all requests for this route.
+                      </p>
                     </div>
 
                     <div className="mt-4 grid gap-4 xl:grid-cols-2">
@@ -705,13 +557,6 @@ export function ConfigForm({
                 ))
               )}
             </div>
-          </div>
-
-          <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Configuration Preview</h3>
-            <pre className="bg-gray-50 p-4 rounded border border-gray-200 overflow-x-auto text-sm">
-              {JSON.stringify(formData, null, 2)}
-            </pre>
           </div>
 
           <div className="flex flex-wrap gap-4">

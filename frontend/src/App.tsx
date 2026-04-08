@@ -3,6 +3,7 @@ import { Header } from './components/Header';
 import { Dashboard } from './pages/Dashboard';
 import { Configuration } from './pages/Configuration';
 import { Monitor } from './pages/Monitor';
+import { Analysis } from './pages/Analysis';
 
 function App() {
   return (
@@ -14,6 +15,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/config" element={<Configuration />} />
             <Route path="/monitor" element={<Monitor />} />
+            <Route path="/analysis" element={<Analysis />} />
           </Routes>
         </main>
       </div>

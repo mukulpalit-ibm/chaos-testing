@@ -43,6 +43,16 @@ export function Header() {
             >
               Monitor
             </Link>
+            <Link
+              to="/analysis"
+              className={`px-3 py-2 rounded-md text-sm font-medium ${
+                isActive('/analysis')
+                  ? 'bg-primary text-white'
+                  : 'text-gray-700 hover:bg-gray-100'
+              }`}
+            >
+              AI Analysis
+            </Link>
           </nav>
         </div>
       </div>

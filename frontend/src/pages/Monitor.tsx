@@ -92,6 +92,7 @@ export function Monitor() {
               <option value="ALL">All chaos</option>
               <option value="latency">Latency</option>
               <option value="error">Error</option>
+              <option value="corruption">Corruption</option>
             </select>
           </div>
 

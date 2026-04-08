@@ -3,6 +3,7 @@ package llm
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -94,6 +95,29 @@ type Anomaly struct {
 	Description string  `json:"description"`
 }
 
+// unitSuffixRe matches numbers followed by common unit strings (e.g. 26.4ms, 100s, 95%)
+var unitSuffixRe = regexp.MustCompile(`(\d+\.?\d*)(ms|s|%|kb|mb|gb)\b`)
+
+// cleanLLMJSON strips markdown code fences and removes unit suffixes from numeric
+// values so that LLM output that is almost-valid JSON can be parsed cleanly.
+func cleanLLMJSON(raw string) string {
+	raw = strings.TrimSpace(raw)
+	// Strip ```json ... ``` or ``` ... ``` fences
+	if strings.HasPrefix(raw, "```") {
+		lines := strings.SplitN(raw, "\n", 2)
+		if len(lines) == 2 {
+			raw = lines[1]
+		}
+		if idx := strings.LastIndex(raw, "```"); idx >= 0 {
+			raw = raw[:idx]
+		}
+		raw = strings.TrimSpace(raw)
+	}
+	// Remove unit suffixes so "26.4ms" -> "26.4" and "95%" -> "95"
+	raw = unitSuffixRe.ReplaceAllString(raw, "$1")
+	return raw
+}
+
 // NewAnalyzer creates a new analyzer with the specified model
 func NewAnalyzer(model string) *Analyzer {
 	return &Analyzer{
@@ -127,24 +151,25 @@ func (a *Analyzer) AnalyzeMetrics(data AnalysisRequest) (*AnalysisResponse, erro
 	// Try to parse JSON response
 	var analysis AnalysisResponse
 
-	// Extract JSON from response (LLM might add extra text)
-	jsonStart := strings.Index(response, "{")
-	jsonEnd := strings.LastIndex(response, "}")
+	// Clean LLM output (strip fences, fix unit-suffixed numbers) then extract JSON object
+	cleaned := cleanLLMJSON(response)
+	jsonStart := strings.Index(cleaned, "{")
+	jsonEnd := strings.LastIndex(cleaned, "}")
 
 	if jsonStart >= 0 && jsonEnd > jsonStart {
-		jsonStr := response[jsonStart : jsonEnd+1]
+		jsonStr := cleaned[jsonStart : jsonEnd+1]
 		if err := json.Unmarshal([]byte(jsonStr), &analysis); err != nil {
-			// If JSON parsing fails, create a basic response with the raw text
+			// Parsing still failed — surface raw text as summary so nothing is lost
 			analysis = AnalysisResponse{
 				Summary:         response,
 				Patterns:        []Pattern{},
 				Recommendations: []Recommendation{},
 				Anomalies:       []Anomaly{},
-				HealthScore:     50.0, // Default neutral score
+				HealthScore:     50.0,
 			}
 		}
 	} else {
-		// No JSON found, use raw response
+		// No JSON object found — use raw response as summary
 		analysis = AnalysisResponse{
 			Summary:         response,
 			Patterns:        []Pattern{},

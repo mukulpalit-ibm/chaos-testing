@@ -28,13 +28,7 @@ export interface RouteChaosRule {
 }
 
 export interface ChaosConfig {
-  enabled: boolean;
-  defaultProbability: number;
-  latency: LatencyRule;
-  errors: ErrorRule;
   routes: RouteChaosRule[];
-  updatedAt?: number;
-  versionName?: string;
 }
 
 export interface Metrics {
@@ -84,4 +78,53 @@ export interface RequestFilters {
   route: string;
 }
 
-// Made with Bob
+// --- AI Analysis types (mirror back-end/proxy/llm/analyzer.go) ---
+
+export interface RouteStatistics {
+  path: string;
+  requestCount: number;
+  averageLatency: number;
+  errorRate: number;
+  chaosEnabled: boolean;
+}
+
+export interface Pattern {
+  type: string; // "error_spike" | "latency_increase" | "route_correlation"
+  description: string;
+  severity: 'low' | 'medium' | 'high';
+  affectedRoutes: string[];
+}
+
+export interface Recommendation {
+  title: string;
+  description: string;
+  priority: 'low' | 'medium' | 'high' | 'critical';
+  actionItems: string[];
+  impact: string;
+}
+
+export interface Anomaly {
+  metric: string;
+  expected: number;
+  actual: number;
+  deviation: number;
+  description: string;
+}
+
+export interface AnalysisResponse {
+  summary: string;
+  patterns: Pattern[];
+  recommendations: Recommendation[];
+  anomalies: Anomaly[];
+  healthScore: number;
+  generatedAt: string;
+  model: string;
+  processingTimeMs: number;
+}
+
+export interface ChartDataPoint {
+  time: string;
+  requests: number;
+  chaos: number;
+}
+

@@ -1,4 +1,5 @@
 import type {
+  AnalysisResponse,
   ChaosConfig,
   ConfigValidationResult,
   DiscoveredRoute,
@@ -39,28 +40,6 @@ const validateConfig = (config: ChaosConfig): ConfigValidationResult => {
     }
   };
 
-  validateProbability(config.defaultProbability, 'Default chaos probability');
-  validateProbability(config.latency.probability, 'Global latency probability');
-  validateProbability(config.errors.probability, 'Global error probability');
-
-  if (config.latency.minDelay > config.latency.maxDelay) {
-    errors.push('Global latency min delay must be less than or equal to max delay.');
-  }
-
-  if (!config.errors.statusCodes.length) {
-    errors.push('At least one global error status code is required when error injection is configured.');
-  }
-
-  if (config.defaultProbability > 0.3) {
-    warnings.push('Default chaos probability above 30% can produce unrealistic test behavior.');
-  }
-
-  config.errors.statusCodes.forEach(code => {
-    if (code < 400 || code > 599) {
-      errors.push(`Global status code ${code} must be a valid 4xx or 5xx HTTP code.`);
-    }
-  });
-
   config.routes.forEach(route => {
     validateProbability(route.latency.probability, `${route.method} ${route.path} latency probability`);
     validateProbability(route.errors.probability, `${route.method} ${route.path} error probability`);
@@ -83,10 +62,6 @@ const validateConfig = (config: ChaosConfig): ConfigValidationResult => {
       warnings.push(`${route.method} ${route.path}: error probability above 30% may be too aggressive for initial experiments.`);
     }
   });
-
-  if (!config.enabled) {
-    warnings.push('Chaos is globally disabled. Route rules will not take effect until chaos is enabled.');
-  }
 
   return {
     valid: errors.length === 0,
@@ -173,23 +148,7 @@ const mapBackendConfig = (backendConfig: Record<
     return routeRule;
   });
 
-  return {
-    enabled: false,
-    defaultProbability: 0.1,
-    latency: {
-      enabled: true,
-      minDelay: 100,
-      maxDelay: 500,
-      probability: 0.3,
-    },
-    errors: {
-      enabled: true,
-      probability: 0.1,
-      statusCodes: [500, 502, 503],
-    },
-    routes,
-    updatedAt: Date.now(),
-  };
+  return { routes };
 };
 
 const updateBackendConfig = async (config: ChaosConfig): Promise<void> => {
@@ -265,13 +224,49 @@ export const api = {
   getDiscoveredRoutes: async (): Promise<DiscoveredRoute[]> => {
     const res = await fetch(`${API_BASE}/chaos/routes`);
     if (!res.ok) throw new Error('Failed to fetch routes');
-    return res.json();
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
   },
 
 
   setChaosEnabled: async (enabled: boolean): Promise<void> => {
-    // This would need backend support - for now just a placeholder
-    console.log('Set chaos enabled:', enabled);
+    // Toggle enabled flag on every configured route in the backend
+    const res = await fetch(`${API_BASE}/chaos/config`);
+    if (!res.ok) throw new Error('Failed to fetch config');
+    const backendConfig: Record<string, {
+      enabled: boolean;
+      failureRate: number;
+      delayRate: number;
+      minDelayMs: number;
+      maxDelayMs: number;
+      errorCodes: number[] | null;
+      targetHeader?: string;
+      targetValue?: string;
+      corruptionRate?: number;
+    }> = await res.json();
+
+    const updated: Record<string, unknown> = {};
+    for (const [route, config] of Object.entries(backendConfig)) {
+      updated[route] = { ...config, enabled };
+    }
+
+    const putRes = await fetch(`${API_BASE}/chaos/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated),
+    });
+    if (!putRes.ok) throw new Error('Failed to toggle chaos state');
+  },
+
+  getAnalysis: async (model = 'llama3'): Promise<AnalysisResponse> => {
+    const res = await fetch(`${API_BASE}/chaos/analyze?model=${encodeURIComponent(model)}`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || 'Analysis failed');
+    }
+    return res.json();
   },
 
   createRouteRuleFromDiscovery: async (path: string, method: HttpMethod): Promise<RouteChaosRule> => {
