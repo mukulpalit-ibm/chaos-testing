@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
@@ -27,18 +28,48 @@ type RouteConfig struct {
 	CorruptionRate float64 `json:"corruptionRate"` // 0.0 to 1.0
 }
 
+// RouteMetrics tracks statistics per route
+type RouteMetrics struct {
+	RequestCount int       `json:"requestCount"`
+	TotalLatency int64     `json:"totalLatency"`
+	ErrorCount   int       `json:"errorCount"`
+	LastSeen     time.Time `json:"lastSeen"`
+}
+
+// RequestLog stores individual request details
+type RequestLog struct {
+	ID        string  `json:"id"`
+	Timestamp int64   `json:"timestamp"`
+	Route     string  `json:"route"`
+	Method    string  `json:"method"`
+	Status    int     `json:"status"`
+	Latency   int64   `json:"latency"`
+	ChaosType *string `json:"chaosType,omitempty"`
+}
+
 type ChaosState struct {
 	mu            sync.RWMutex
 	Discovered    map[string]bool
 	Configs       map[string]*RouteConfig
 	ExcludedPaths []string `json:"excludedPaths"`
+	// Metrics tracking
+	TotalRequests   int
+	ChaosRequests   int
+	SuccessRequests int
+	TotalLatency    int64
+	RouteMetrics    map[string]*RouteMetrics
+	// Request logging
+	RequestLogs      []RequestLog
+	requestIDCounter int
 }
 
 var state = &ChaosState{
-	Discovered: make(map[string]bool),
-	Configs:    make(map[string]*RouteConfig),
+	Discovered:   make(map[string]bool),
+	Configs:      make(map[string]*RouteConfig),
+	RouteMetrics: make(map[string]*RouteMetrics),
+	RequestLogs:  make([]RequestLog, 0, 100),
 	// Hardcode internal proxy paths and backend health checks to never fail
-	ExcludedPaths: []string{"/health", "/chaos/config", "/chaos/routes"},
+	ExcludedPaths: []string{"/health", "/chaos/config", "/chaos/routes", "/chaos/metrics", "/chaos/requests"},
 }
 
 // normalizeRoute simplifies paths (e.g., /users/123 -> /users/:id) to prevent state bloat
@@ -107,10 +138,12 @@ func corruptJSON(body []byte) []byte {
 
 func chaosMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startTime := time.Now()
+
 		// [KEEP YOUR CORS HEADERS HERE]
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Chaos-Target") // Added custom header to allowed list
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Chaos-Target")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
@@ -119,7 +152,7 @@ func chaosMiddleware(next http.Handler) http.Handler {
 
 		route := normalizeRoute(r.URL.Path)
 
-		// [KEEP YOUR EXCLUSION & DISCOVERY LOGIC HERE]
+		// [EXCLUSION & DISCOVERY LOGIC]
 		state.mu.Lock()
 		isExcluded := false
 		for _, excludedPath := range state.ExcludedPaths {
@@ -134,6 +167,10 @@ func chaosMiddleware(next http.Handler) http.Handler {
 			if _, exists := state.Configs[route]; !exists {
 				state.Configs[route] = &RouteConfig{Enabled: false}
 			}
+			// Initialize route metrics if needed
+			if state.RouteMetrics[route] == nil {
+				state.RouteMetrics[route] = &RouteMetrics{}
+			}
 		}
 
 		var config *RouteConfig
@@ -143,22 +180,61 @@ func chaosMiddleware(next http.Handler) http.Handler {
 		}
 		state.mu.Unlock()
 
+		// Track chaos type for logging
+		var chaosType *string
+		chaosInjected := false
+
 		// Bypass chaos if disabled or excluded
-		if isExcluded || config == nil || !config.Enabled {
+		if isExcluded {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// --- NEW: BLAST RADIUS CHECK ---
+		if config == nil || !config.Enabled {
+			// Still track the request even if chaos is disabled
+			interceptor := &responseInterceptor{
+				ResponseWriter: w,
+				body:           &bytes.Buffer{},
+				statusCode:     200,
+			}
+			next.ServeHTTP(interceptor, r)
+
+			// Log request
+			latency := time.Since(startTime).Milliseconds()
+			logRequest(route, r.Method, interceptor.statusCode, latency, nil)
+
+			// Update metrics
+			updateMetrics(route, latency, interceptor.statusCode, false)
+
+			// Write response
+			w.WriteHeader(interceptor.statusCode)
+			w.Write(interceptor.body.Bytes())
+			return
+		}
+
+		// --- BLAST RADIUS CHECK ---
 		if config.TargetHeader != "" {
 			if r.Header.Get(config.TargetHeader) != config.TargetValue {
 				log.Printf("🛡️ CHAOS BYPASSED: Header mismatch for %s", route)
-				next.ServeHTTP(w, r)
+
+				interceptor := &responseInterceptor{
+					ResponseWriter: w,
+					body:           &bytes.Buffer{},
+					statusCode:     200,
+				}
+				next.ServeHTTP(interceptor, r)
+
+				latency := time.Since(startTime).Milliseconds()
+				logRequest(route, r.Method, interceptor.statusCode, latency, nil)
+				updateMetrics(route, latency, interceptor.statusCode, false)
+
+				w.WriteHeader(interceptor.statusCode)
+				w.Write(interceptor.body.Bytes())
 				return
 			}
 		}
 
-		// --- DELAY & FAILURE LOGIC (Unchanged) ---
+		// --- DELAY INJECTION ---
 		if config.DelayRate > 0 && rand.Float64() < config.DelayRate {
 			delay := config.MinDelayMs
 			if config.MaxDelayMs > config.MinDelayMs {
@@ -167,28 +243,36 @@ func chaosMiddleware(next http.Handler) http.Handler {
 			if delay > 0 {
 				log.Printf("⏳ CHAOS DELAY: %s sleeping for %dms", route, delay)
 				time.Sleep(time.Duration(delay) * time.Millisecond)
+				chaosTypeStr := "latency"
+				chaosType = &chaosTypeStr
+				chaosInjected = true
 			}
 		}
 
+		// --- ERROR INJECTION ---
 		if config.FailureRate > 0 && rand.Float64() < config.FailureRate {
 			errorCode := 500
 			if len(config.ErrorCodes) > 0 {
 				errorCode = config.ErrorCodes[rand.Intn(len(config.ErrorCodes))]
 			}
 			log.Printf("💥 CHAOS HIT: %s -> %d", route, errorCode)
+
+			latency := time.Since(startTime).Milliseconds()
+			chaosTypeStr := "error"
+			logRequest(route, r.Method, errorCode, latency, &chaosTypeStr)
+			updateMetrics(route, latency, errorCode, true)
+
 			http.Error(w, "Chaos Injected: "+http.StatusText(errorCode), errorCode)
 			return
 		}
 
-		// --- NEW: PAYLOAD TAMPERING ---
-		// We survived the hard failures! Now we intercept the response to corrupt it.
+		// --- PAYLOAD TAMPERING ---
 		interceptor := &responseInterceptor{
 			ResponseWriter: w,
 			body:           &bytes.Buffer{},
-			statusCode:     200, // Default assume OK
+			statusCode:     200,
 		}
 
-		// Forward to backend, but write into our interceptor instead of directly to client
 		next.ServeHTTP(interceptor, r)
 
 		finalBody := interceptor.body.Bytes()
@@ -198,13 +282,74 @@ func chaosMiddleware(next http.Handler) http.Handler {
 			if config.CorruptionRate > 0 && rand.Float64() < config.CorruptionRate {
 				log.Printf("🦠 PAYLOAD CORRUPTED: %s", route)
 				finalBody = corruptJSON(finalBody)
+				chaosTypeStr := "corruption"
+				chaosType = &chaosTypeStr
+				chaosInjected = true
 			}
 		}
+
+		// Log request
+		latency := time.Since(startTime).Milliseconds()
+		logRequest(route, r.Method, interceptor.statusCode, latency, chaosType)
+		updateMetrics(route, latency, interceptor.statusCode, chaosInjected)
 
 		// Write the final headers and body back to the real client
 		w.WriteHeader(interceptor.statusCode)
 		w.Write(finalBody)
 	})
+}
+
+// logRequest adds a request to the request log
+func logRequest(route, method string, status int, latency int64, chaosType *string) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	state.requestIDCounter++
+	log := RequestLog{
+		ID:        fmt.Sprintf("req-%d", state.requestIDCounter),
+		Timestamp: time.Now().UnixMilli(),
+		Route:     route,
+		Method:    method,
+		Status:    status,
+		Latency:   latency,
+		ChaosType: chaosType,
+	}
+
+	state.RequestLogs = append(state.RequestLogs, log)
+
+	// Keep only last 100 requests to prevent memory bloat
+	if len(state.RequestLogs) > 100 {
+		state.RequestLogs = state.RequestLogs[len(state.RequestLogs)-100:]
+	}
+}
+
+// updateMetrics updates global and per-route metrics
+func updateMetrics(route string, latency int64, status int, chaosInjected bool) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	// Update global metrics
+	state.TotalRequests++
+	state.TotalLatency += latency
+
+	if chaosInjected {
+		state.ChaosRequests++
+	}
+
+	if status >= 200 && status < 400 {
+		state.SuccessRequests++
+	}
+
+	// Update route-specific metrics
+	if state.RouteMetrics[route] != nil {
+		state.RouteMetrics[route].RequestCount++
+		state.RouteMetrics[route].TotalLatency += latency
+		state.RouteMetrics[route].LastSeen = time.Now()
+
+		if status >= 400 {
+			state.RouteMetrics[route].ErrorCount++
+		}
+	}
 }
 
 // --- Control API Handlers ---
@@ -213,10 +358,32 @@ func handleRoutes(w http.ResponseWriter, r *http.Request) {
 	state.mu.RLock()
 	defer state.mu.RUnlock()
 
-	// Format as requested in the plan
-	var routes []map[string]string
+	// Enhanced format with statistics
+	var routes []map[string]interface{}
 	for route := range state.Discovered {
-		routes = append(routes, map[string]string{"method": "ANY", "path": route})
+		metrics := state.RouteMetrics[route]
+		if metrics == nil {
+			metrics = &RouteMetrics{}
+		}
+
+		avgLatency := 0.0
+		if metrics.RequestCount > 0 {
+			avgLatency = float64(metrics.TotalLatency) / float64(metrics.RequestCount)
+		}
+
+		errorRate := 0.0
+		if metrics.RequestCount > 0 {
+			errorRate = float64(metrics.ErrorCount) / float64(metrics.RequestCount) * 100
+		}
+
+		routes = append(routes, map[string]interface{}{
+			"method":         "ANY",
+			"path":           route,
+			"requestCount":   metrics.RequestCount,
+			"averageLatency": avgLatency,
+			"errorRate":      errorRate,
+			"lastSeen":       metrics.LastSeen.UnixMilli(),
+		})
 	}
 
 	json.NewEncoder(w).Encode(routes)
@@ -249,6 +416,56 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
+func handleMetrics(w http.ResponseWriter, r *http.Request) {
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	// Count active route rules
+	activeRules := 0
+	for _, config := range state.Configs {
+		if config.Enabled {
+			activeRules++
+		}
+	}
+
+	// Calculate success rate
+	successRate := 0.0
+	if state.TotalRequests > 0 {
+		successRate = float64(state.SuccessRequests) / float64(state.TotalRequests) * 100
+	}
+
+	// Calculate average latency
+	avgLatency := 0.0
+	if state.TotalRequests > 0 {
+		avgLatency = float64(state.TotalLatency) / float64(state.TotalRequests)
+	}
+
+	metrics := map[string]interface{}{
+		"totalRequests":    state.TotalRequests,
+		"injectedRequests": state.ChaosRequests,
+		"successRate":      successRate,
+		"averageLatency":   avgLatency,
+		"activeRouteRules": activeRules,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(metrics)
+}
+
+func handleRequests(w http.ResponseWriter, r *http.Request) {
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	// Return last 50 requests (or all if less than 50)
+	start := 0
+	if len(state.RequestLogs) > 50 {
+		start = len(state.RequestLogs) - 50
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(state.RequestLogs[start:])
+}
+
 // corsMiddleware is a quick hackathon-grade CORS implementation for the React app
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -273,11 +490,17 @@ func main() {
 	// Control API Routes (Wrapped in CORS)
 	mux.HandleFunc("/chaos/routes", corsMiddleware(handleRoutes))
 	mux.HandleFunc("/chaos/config", corsMiddleware(handleConfig))
+	mux.HandleFunc("/chaos/metrics", corsMiddleware(handleMetrics))
+	mux.HandleFunc("/chaos/requests", corsMiddleware(handleRequests))
 
 	// Catch-all route for proxying (Wrapped in Chaos Middleware)
 	mux.Handle("/", chaosMiddleware(proxy))
 
 	log.Println("😈 Chaos Proxy running on http://localhost:3999")
+	log.Println("📊 Metrics endpoint: http://localhost:3999/chaos/metrics")
+	log.Println("📝 Requests endpoint: http://localhost:3999/chaos/requests")
+	log.Println("🛣️  Routes endpoint: http://localhost:3999/chaos/routes")
+	log.Println("⚙️  Config endpoint: http://localhost:3999/chaos/config")
 	if err := http.ListenAndServe(":3999", mux); err != nil {
 		log.Fatalf("Proxy failed to start: %v", err)
 	}
