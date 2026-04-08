@@ -95,13 +95,20 @@ type Anomaly struct {
 	Description string  `json:"description"`
 }
 
-// unitSuffixRe matches numbers followed by common unit strings (e.g. 26.4ms, 100s, 95%)
+// unitSuffixRe: "26.4ms" -> "26.4", "95%" -> "95"
 var unitSuffixRe = regexp.MustCompile(`(\d+\.?\d*)(ms|s|%|kb|mb|gb)\b`)
 
-// cleanLLMJSON strips markdown code fences and removes unit suffixes from numeric
-// values so that LLM output that is almost-valid JSON can be parsed cleanly.
+// cmpUnitRe: "<10ms" or ">100ms" or "<=50ms" inside a JSON value position -> bare number
+var cmpUnitRe = regexp.MustCompile(`(:\s*)"?[<>]=?\s*(\d+\.?\d*)\s*(?:ms|s|%|kb|mb|gb)?\b"?`)
+
+// quotedUnitRe: "\"711.7ms\"" (quoted unit string in a numeric field) -> bare number
+var quotedUnitRe = regexp.MustCompile(`(:\s*)"(\d+\.?\d*)\s*(?:ms|s|%|kb|mb|gb)?"`)
+
+// cleanLLMJSON strips markdown fences and repairs common LLM JSON mistakes so
+// that json.Unmarshal has the best chance of succeeding.
 func cleanLLMJSON(raw string) string {
 	raw = strings.TrimSpace(raw)
+
 	// Strip ```json ... ``` or ``` ... ``` fences
 	if strings.HasPrefix(raw, "```") {
 		lines := strings.SplitN(raw, "\n", 2)
@@ -113,8 +120,16 @@ func cleanLLMJSON(raw string) string {
 		}
 		raw = strings.TrimSpace(raw)
 	}
-	// Remove unit suffixes so "26.4ms" -> "26.4" and "95%" -> "95"
+
+	// "<10ms" / ">100" / "<=50ms" in value position -> bare number
+	raw = cmpUnitRe.ReplaceAllString(raw, "${1}${2}")
+
+	// "711.7ms" (quoted unit string) in value position -> bare number
+	raw = quotedUnitRe.ReplaceAllString(raw, "${1}${2}")
+
+	// Bare unit suffix: "26.4ms" -> "26.4"
 	raw = unitSuffixRe.ReplaceAllString(raw, "$1")
+
 	return raw
 }
 

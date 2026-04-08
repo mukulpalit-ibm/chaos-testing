@@ -2,6 +2,50 @@ import { useState } from 'react';
 import { api } from '../services/api';
 import type { AnalysisResponse, Anomaly, Pattern, Recommendation } from '../types';
 
+/**
+ * If the backend JSON parser failed (LLM produced invalid JSON), the proxy
+ * falls back to putting the raw LLM text in `summary` and leaving patterns /
+ * recommendations / anomalies empty. This function detects that case and
+ * re-parses the summary client-side after applying the same light repairs that
+ * the Go cleaner does.
+ */
+function repairResponse(raw: AnalysisResponse): AnalysisResponse {
+  const hasStructured =
+    raw.patterns.length > 0 ||
+    raw.recommendations.length > 0 ||
+    raw.anomalies.length > 0;
+
+  if (hasStructured) return raw; // already parsed correctly
+
+  const text = raw.summary.trim();
+  const start = text.indexOf('{');
+  const end   = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return raw; // no JSON object found
+
+  try {
+    const jsonStr = text
+      .slice(start, end + 1)
+      // "<10ms" / "<=50ms" / ">100" in value position -> bare number
+      .replace(/(:\s*)"?[<>]=?\s*(\d+\.?\d*)\s*(?:ms|s|%|kb|mb|gb)?"?/g, ': $2')
+      // Quoted unit string e.g. "711.7ms" -> bare number
+      .replace(/(:\s*)"(\d+\.?\d*)\s*(?:ms|s|%|kb|mb|gb)?"/g, ': $2')
+      // Bare unit suffix e.g. 26.4ms -> 26.4
+      .replace(/(\d+\.?\d*)(ms|s|%|kb|mb|gb)\b/g, '$1');
+
+    const parsed = JSON.parse(jsonStr);
+    return {
+      ...raw,
+      summary:         parsed.summary         ?? raw.summary,
+      patterns:        parsed.patterns         ?? [],
+      recommendations: parsed.recommendations  ?? [],
+      anomalies:       parsed.anomalies        ?? [],
+      healthScore:     parsed.healthScore      ?? raw.healthScore,
+    };
+  } catch {
+    return raw; // still broken — show raw summary as-is
+  }
+}
+
 // --- Severity / Priority badge colours ---
 
 const severityClass: Record<string, string> = {
@@ -101,7 +145,7 @@ export function Analysis() {
     setResult(null);
     try {
       const data = await api.getAnalysis(model);
-      setResult(data);
+      setResult(repairResponse(data));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {

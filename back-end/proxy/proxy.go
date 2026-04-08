@@ -141,10 +141,14 @@ func chaosMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		startTime := time.Now()
 
-		// [KEEP YOUR CORS HEADERS HERE]
+		// CORS — allow any origin and any requested headers (local dev)
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Chaos-Target")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		if req := r.Header.Get("Access-Control-Request-Headers"); req != "" {
+			w.Header().Set("Access-Control-Allow-Headers", req)
+		} else {
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, *")
+		}
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
@@ -471,9 +475,14 @@ func handleRequests(w http.ResponseWriter, r *http.Request) {
 // corsMiddleware is a quick hackathon-grade CORS implementation for the React app
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*") // Fine for local dev
-		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		// Echo back whatever headers the browser is requesting — allows any custom header (e.g. X-User-Tier)
+		if req := r.Header.Get("Access-Control-Request-Headers"); req != "" {
+			w.Header().Set("Access-Control-Allow-Headers", req)
+		} else {
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, *")
+		}
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return

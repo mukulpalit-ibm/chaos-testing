@@ -53,6 +53,16 @@ export function Header() {
             >
               AI Analysis
             </Link>
+            <Link
+              to="/tester"
+              className={`px-3 py-2 rounded-md text-sm font-medium ${
+                isActive('/tester')
+                  ? 'bg-primary text-white'
+                  : 'text-gray-700 hover:bg-gray-100'
+              }`}
+            >
+              Test Runner
+            </Link>
           </nav>
         </div>
       </div>
